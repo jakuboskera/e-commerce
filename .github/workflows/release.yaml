@@ -1,0 +1,124 @@
+---
+name: release
+
+"on":
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/e-commerce
+
+jobs:
+  # ── 1. Detect which apps changed ─────────────────────────────────────────
+  detect-changes:
+    name: Detect changed apps
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      any_changed: ${{ steps.set-matrix.outputs.any_changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            api-gateway:
+              - 'apps/api-gateway/**'
+            rate-limiter:
+              - 'apps/rate-limiter/**'
+            catalog-api:
+              - 'apps/catalog-api/**'
+            catalog-search:
+              - 'apps/catalog-search/**'
+            cart-api:
+              - 'apps/cart-api/**'
+            cart-worker:
+              - 'apps/cart-worker/**'
+            order-api:
+              - 'apps/order-api/**'
+            order-processor:
+              - 'apps/order-processor/**'
+            payment-api:
+              - 'apps/payment-api/**'
+            payment-webhook:
+              - 'apps/payment-webhook/**'
+            notification-api:
+              - 'apps/notification-api/**'
+            notification-worker:
+              - 'apps/notification-worker/**'
+            search-api:
+              - 'apps/search-api/**'
+            search-indexer:
+              - 'apps/search-indexer/**'
+
+      - id: set-matrix
+        run: |
+          # Build a JSON array of changed app names
+          CHANGES='${{ steps.filter.outputs.changes }}'
+          # On a version tag, build ALL apps regardless of what changed
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            CHANGES='["api-gateway","rate-limiter","catalog-api","catalog-search","cart-api","cart-worker","order-api","order-processor","payment-api","payment-webhook","notification-api","notification-worker","search-api","search-indexer"]'
+          fi
+          echo "matrix=${CHANGES}" >> "$GITHUB_OUTPUT"
+          if [[ "$CHANGES" == "[]" ]]; then
+            echo "any_changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "any_changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── 2. Build and push images ──────────────────────────────────────────────
+  build-push:
+    name: Build & push ${{ matrix.app }}
+    needs: detect-changes
+    if: needs.detect-changes.outputs.any_changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        app: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.app }}
+          tags: |
+            # sha-<short> on every push to main
+            type=sha,prefix=sha-,format=short,enable={{is_default_branch}}
+            # v1.2.3 on Git tag
+            type=semver,pattern={{version}}
+            # latest on every main push
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/${{ matrix.app }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
