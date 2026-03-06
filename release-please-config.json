@@ -1,0 +1,31 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "simple",
+  "include-component-in-tag": true,
+  "tag-separator": "/",
+  "separate-pull-requests": false,
+  "changelog-sections": [
+    { "type": "feat", "section": "Features" },
+    { "type": "fix", "section": "Bug Fixes" },
+    { "type": "perf", "section": "Performance" },
+    { "type": "refactor", "section": "Refactoring", "hidden": true },
+    { "type": "docs", "section": "Documentation", "hidden": true },
+    { "type": "chore", "section": "Miscellaneous", "hidden": true }
+  ],
+  "packages": {
+    "apps/api-gateway": { "component": "api-gateway" },
+    "apps/cart-api": { "component": "cart-api" },
+    "apps/cart-worker": { "component": "cart-worker" },
+    "apps/catalog-api": { "component": "catalog-api" },
+    "apps/catalog-search": { "component": "catalog-search" },
+    "apps/notification-api": { "component": "notification-api" },
+    "apps/notification-worker": { "component": "notification-worker" },
+    "apps/order-api": { "component": "order-api" },
+    "apps/order-processor": { "component": "order-processor" },
+    "apps/payment-api": { "component": "payment-api" },
+    "apps/payment-webhook": { "component": "payment-webhook" },
+    "apps/rate-limiter": { "component": "rate-limiter" },
+    "apps/search-api": { "component": "search-api" },
+    "apps/search-indexer": { "component": "search-indexer" }
+  }
+}
