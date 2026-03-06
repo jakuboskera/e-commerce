@@ -5,88 +5,70 @@ name: release
   push:
     branches:
       - main
-    tags:
-      - "v*.*.*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+  packages: write
 
 env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ${{ github.repository_owner }}/e-commerce
 
 jobs:
-  # ── 1. Detect which apps changed ─────────────────────────────────────────
-  detect-changes:
-    name: Detect changed apps
+  # ── 1. Release Please — version bump PRs & GitHub Releases ────────────────
+  release-please:
+    name: Release Please
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-      any_changed: ${{ steps.set-matrix.outputs.any_changed }}
+      releases_created: ${{ steps.release.outputs.releases_created }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: googleapis/release-please-action@v4
+        id: release
         with:
-          fetch-depth: 0
+          manifest-file: ".release-please-manifest.json"
+          config-file: "release-please-config.json"
 
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            api-gateway:
-              - 'apps/api-gateway/**'
-            rate-limiter:
-              - 'apps/rate-limiter/**'
-            catalog-api:
-              - 'apps/catalog-api/**'
-            catalog-search:
-              - 'apps/catalog-search/**'
-            cart-api:
-              - 'apps/cart-api/**'
-            cart-worker:
-              - 'apps/cart-worker/**'
-            order-api:
-              - 'apps/order-api/**'
-            order-processor:
-              - 'apps/order-processor/**'
-            payment-api:
-              - 'apps/payment-api/**'
-            payment-webhook:
-              - 'apps/payment-webhook/**'
-            notification-api:
-              - 'apps/notification-api/**'
-            notification-worker:
-              - 'apps/notification-worker/**'
-            search-api:
-              - 'apps/search-api/**'
-            search-indexer:
-              - 'apps/search-indexer/**'
-
-      - id: set-matrix
+      - name: Build release matrix
+        id: matrix
+        if: steps.release.outputs.releases_created == 'true'
+        env:
+          OUTPUTS: ${{ toJSON(steps.release.outputs) }}
         run: |
-          # Build a JSON array of changed app names
-          CHANGES='${{ steps.filter.outputs.changes }}'
-          # On a version tag, build ALL apps regardless of what changed
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            CHANGES='["api-gateway","rate-limiter","catalog-api","catalog-search","cart-api","cart-worker","order-api","order-processor","payment-api","payment-webhook","notification-api","notification-worker","search-api","search-indexer"]'
-          fi
-          echo "matrix=${CHANGES}" >> "$GITHUB_OUTPUT"
-          if [[ "$CHANGES" == "[]" ]]; then
-            echo "any_changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "any_changed=true" >> "$GITHUB_OUTPUT"
-          fi
+          PATHS='${{ steps.release.outputs.paths_released }}'
 
-  # ── 2. Build and push images ──────────────────────────────────────────────
+          MATRIX="[]"
+          while IFS= read -r path; do
+            [[ -z "${path}" ]] && continue
+            app="${path##*/}"
+            version=$(echo "${OUTPUTS}" | jq -r --arg k "${path}--version" '.[$k]')
+            major="${version%%.*}"
+            minor="${version%.*}"
+            MATRIX=$(echo "${MATRIX}" | jq -c \
+              --arg app "${app}" \
+              --arg path "${path}" \
+              --arg version "${version}" \
+              --arg major "${major}" \
+              --arg minor "${minor}" \
+              '. + [{app: $app, path: $path, version: $version, major: $major, minor: $minor}]')
+          done < <(echo "${PATHS}" | jq -r '.[]')
+
+          echo "matrix={\"include\":${MATRIX}}" >> "$GITHUB_OUTPUT"
+
+          echo "### Released services" >> "$GITHUB_STEP_SUMMARY"
+          echo "${MATRIX}" | jq -r '.[] | "- **\(.app)** → v\(.version)"' >> "$GITHUB_STEP_SUMMARY"
+
+  # ── 2. Build & push Docker images for each released service ───────────────
   build-push:
-    name: Build & push ${{ matrix.app }}
-    needs: detect-changes
-    if: needs.detect-changes.outputs.any_changed == 'true'
+    name: "Build ${{ matrix.app }}"
+    needs: release-please
+    if: needs.release-please.outputs.releases_created == 'true'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
     strategy:
       fail-fast: false
-      matrix:
-        app: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
-
+      matrix: ${{ fromJson(needs.release-please.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -100,25 +82,27 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Extract metadata
+      - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.app }}
           tags: |
-            # sha-<short> on every push to main
-            type=sha,prefix=sha-,format=short,enable={{is_default_branch}}
-            # v1.2.3 on Git tag
-            type=semver,pattern={{version}}
-            # latest on every main push
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ matrix.version }}
+            type=raw,value=${{ matrix.minor }}
+            type=raw,value=${{ matrix.major }},enable=${{ matrix.major != '0' }}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.title=${{ matrix.app }}
+            org.opencontainers.image.version=${{ matrix.version }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: apps/${{ matrix.app }}
+          context: ${{ matrix.path }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.app }}
+          cache-to: type=gha,scope=${{ matrix.app }},mode=max
