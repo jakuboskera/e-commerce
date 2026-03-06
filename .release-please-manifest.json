@@ -1,0 +1,7 @@
+{
+  "apps/api-gateway": "0.1.0",
+  "apps/notification-api": "0.1.0",
+  "apps/order-api": "0.1.0",
+  "apps/order-processor": "0.1.0",
+  "apps/payment-api": "0.1.0"
+}
