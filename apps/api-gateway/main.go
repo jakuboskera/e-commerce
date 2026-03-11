@@ -21,7 +21,7 @@ func main() {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"app": appName, "status": "ok"})
+		json.NewEncoder(w).Encode(map[string]string{"app": appName, "status": "is ok"})
 	})
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
