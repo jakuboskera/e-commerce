@@ -101,7 +101,7 @@ jobs:
             org.opencontainers.image.version=${{ matrix.version }}
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.path }}
           platforms: linux/amd64,linux/arm64
